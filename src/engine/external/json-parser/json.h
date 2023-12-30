@@ -1,8 +1,8 @@
 
 /* vim: set et ts=3 sw=3 sts=3 ft=c:
  *
- * Copyright (C) 2012-2021 the json-parser authors  All rights reserved.
- * https://github.com/json-parser/json-parser
+ * Copyright (C) 2012, 2013, 2014 James McLaughlin et al.  All rights reserved.
+ * https://github.com/udp/json-parser
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,22 +36,15 @@
 #endif
 
 #ifndef json_int_t
-   #undef JSON_INT_T_OVERRIDDEN
-   #if defined(_MSC_VER)
-      #define json_int_t __int64
-   #elif (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || (defined(__cplusplus) && __cplusplus >= 201103L)
-      /* C99 and C++11 */
-      #include <stdint.h>
-      #define json_int_t int_fast64_t
+   #ifndef _MSC_VER
+      #include <inttypes.h>
+      #define json_int_t int64_t
    #else
-      /* C89 */
-      #define json_int_t long
+      #define json_int_t __int64
    #endif
-#else
-   #define JSON_INT_T_OVERRIDDEN 1
 #endif
 
-#include <stddef.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 
@@ -64,7 +57,7 @@
 
 typedef struct
 {
-   unsigned long max_memory;  /* should be size_t, but would modify the API */
+   unsigned long max_memory;
    int settings;
 
    /* Custom allocator support (leave null to use malloc/free)
@@ -96,15 +89,6 @@ typedef enum
 
 extern const struct _json_value json_value_none;
 
-typedef struct _json_object_entry
-{
-    json_char * name;
-    unsigned int name_length;
-
-    struct _json_value * value;
-
-} json_object_entry;
-
 typedef struct _json_value
 {
    struct _json_value * parent;
@@ -128,13 +112,20 @@ typedef struct _json_value
       {
          unsigned int length;
 
-         json_object_entry * values;
+         struct
+         {
+            json_char * name;
+            unsigned int name_length;
 
-         #if defined(__cplusplus)
-         json_object_entry * begin () const
+            struct _json_value * value;
+
+         } * values;
+
+         #if defined(__cplusplus) && __cplusplus >= 201103L
+         decltype(values) begin () const
          {  return values;
          }
-         json_object_entry * end () const
+         decltype(values) end () const
          {  return values + length;
          }
          #endif
@@ -146,11 +137,11 @@ typedef struct _json_value
          unsigned int length;
          struct _json_value ** values;
 
-         #if defined(__cplusplus)
-         _json_value ** begin () const
+         #if defined(__cplusplus) && __cplusplus >= 201103L
+         decltype(values) begin () const
          {  return values;
          }
-         _json_value ** end () const
+         decltype(values) end () const
          {  return values + length;
          }
          #endif
@@ -197,7 +188,7 @@ typedef struct _json_value
          }
 
          inline const struct _json_value &operator [] (const char * index) const
-         {
+         { 
             if (type != json_object)
                return json_value_none;
 
@@ -209,7 +200,7 @@ typedef struct _json_value
          }
 
          inline operator const char * () const
-         {
+         {  
             switch (type)
             {
                case json_string:
@@ -221,7 +212,7 @@ typedef struct _json_value
          }
 
          inline operator json_int_t () const
-         {
+         {  
             switch (type)
             {
                case json_integer:
@@ -236,7 +227,7 @@ typedef struct _json_value
          }
 
          inline operator bool () const
-         {
+         {  
             if (type != json_boolean)
                return false;
 
@@ -244,7 +235,7 @@ typedef struct _json_value
          }
 
          inline operator double () const
-         {
+         {  
             switch (type)
             {
                case json_integer:
@@ -280,9 +271,10 @@ void json_value_free (json_value *);
 void json_value_free_ex (json_settings * settings,
                          json_value *);
 
-
 #ifdef __cplusplus
    } /* extern "C" */
 #endif
 
 #endif
+
+
