@@ -75,7 +75,10 @@ static const ColorRGBA gs_ClientNetworkPrintColor{0.7f, 1, 0.7f, 1.0f};
 static const ColorRGBA gs_ClientNetworkErrPrintColor{1.0f, 0.25f, 0.25f, 1.0f};
 
 CClient::CClient() :
-	m_DemoPlayer(&m_SnapshotDelta, true, [&]() { UpdateDemoIntraTimers(); })
+	m_DemoPlayer(&m_SnapshotDelta, true, [&]() { UpdateDemoIntraTimers(); }),
+	m_InputtimeMarginGraph(128),
+	m_GametimeMarginGraph(128),
+	m_FpsGraph(4096)
 {
 	m_StateStartTime = time_get();
 	for(auto &DemoRecorder : m_aDemoRecorder)
@@ -821,11 +824,11 @@ void CClient::DebugRender()
 		float sp = Graphics()->ScreenWidth() / 100.0f;
 		float x = Graphics()->ScreenWidth() - w - sp;
 
-		m_FpsGraph.Scale();
+		m_FpsGraph.Scale(time_freq());
 		m_FpsGraph.Render(Graphics(), TextRender(), x, sp * 5, w, h, "FPS");
-		m_InputtimeMarginGraph.Scale();
+		m_InputtimeMarginGraph.Scale(5 * time_freq());
 		m_InputtimeMarginGraph.Render(Graphics(), TextRender(), x, sp * 6 + h, w, h, "Prediction Margin");
-		m_GametimeMarginGraph.Scale();
+		m_GametimeMarginGraph.Scale(5 * time_freq());
 		m_GametimeMarginGraph.Render(Graphics(), TextRender(), x, sp * 7 + h * 2, w, h, "Gametime Margin");
 	}
 }
@@ -1442,7 +1445,7 @@ void CClient::ProcessServerPacket(CNetChunk *pPacket, int Conn, bool Dummy)
 					m_pMapdownloadTask->Timeout(CTimeout{g_Config.m_ClMapDownloadConnectTimeoutMs, 0, g_Config.m_ClMapDownloadLowSpeedLimit, g_Config.m_ClMapDownloadLowSpeedTime});
 					m_pMapdownloadTask->MaxResponseSize(1024 * 1024 * 1024); // 1 GiB
 					m_pMapdownloadTask->ExpectSha256(*pMapSha256);
-					Engine()->AddJob(m_pMapdownloadTask);
+					Http()->Run(m_pMapdownloadTask);
 				}
 				else
 				{
@@ -2659,6 +2662,7 @@ void CClient::RegisterInterfaces()
 #endif
 	Kernel()->RegisterInterface(static_cast<IFriends *>(&m_Friends), false);
 	Kernel()->ReregisterInterface(static_cast<IFriends *>(&m_Foes));
+	Kernel()->RegisterInterface(static_cast<IHttp *>(&m_Http), false);
 }
 
 void CClient::InitInterfaces()
@@ -2683,12 +2687,12 @@ void CClient::InitInterfaces()
 
 	m_DemoEditor.Init(m_pGameClient->NetVersion(), &m_SnapshotDelta, m_pConsole, m_pStorage);
 
+	m_Http.Init(std::chrono::seconds{1});
+
 	m_ServerBrowser.SetBaseInfo(&m_aNetClient[CONN_CONTACT], m_pGameClient->NetVersion());
 
-	HttpInit(m_pStorage);
-
 #if defined(CONF_AUTOUPDATE)
-	m_Updater.Init();
+	m_Updater.Init(&m_Http);
 #endif
 
 	m_pConfigManager->RegisterCallback(IFavorites::ConfigSaveCallback, m_pFavorites);
@@ -4568,6 +4572,9 @@ bool CClient::RaceRecord_IsRecording()
 
 void CClient::RequestDDNetInfo()
 {
+	if(m_pDDNetInfoTask && !m_pDDNetInfoTask->Done())
+		return;
+
 	char aUrl[256];
 	str_copy(aUrl, DDNET_INFO_URL);
 
@@ -4583,7 +4590,7 @@ void CClient::RequestDDNetInfo()
 	m_pDDNetInfoTask = HttpGetFile(aUrl, Storage(), m_aDDNetInfoTmp, IStorage::TYPE_SAVE);
 	m_pDDNetInfoTask->Timeout(CTimeout{10000, 0, 500, 10});
 	m_pDDNetInfoTask->IpResolve(IPRESOLVE::V4);
-	Engine()->AddJob(m_pDDNetInfoTask);
+	Http()->Run(m_pDDNetInfoTask);
 }
 
 int CClient::GetPredictionTime()

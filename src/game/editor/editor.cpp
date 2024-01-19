@@ -1248,6 +1248,38 @@ void CEditor::DoToolbarLayers(CUIRect ToolBar)
 					pLayer->BrushRotate(s_RotationAmount / 360.0f * pi * 2);
 			}
 		}
+
+		// Color pipette and palette
+		{
+			const float PipetteButtonWidth = 30.0f;
+			const float ColorPickerButtonWidth = 20.0f;
+			const float Spacing = 2.0f;
+			const size_t NumColorsShown = clamp<int>(round_to_int((TB_Top.w - PipetteButtonWidth - 40.0f) / (ColorPickerButtonWidth + Spacing)), 1, std::size(m_aSavedColors));
+
+			CUIRect ColorPalette;
+			TB_Top.VSplitRight(NumColorsShown * (ColorPickerButtonWidth + Spacing) + PipetteButtonWidth, &TB_Top, &ColorPalette);
+
+			// Pipette button
+			static char s_PipetteButton;
+			ColorPalette.VSplitLeft(PipetteButtonWidth, &Button, &ColorPalette);
+			ColorPalette.VSplitLeft(Spacing, nullptr, &ColorPalette);
+			if(DoButton_FontIcon(&s_PipetteButton, FONT_ICON_EYE_DROPPER, m_ColorPipetteActive ? 1 : 0, &Button, 0, "[Ctrl+Shift+C] Color pipette. Pick a color from the screen by clicking on it.", IGraphics::CORNER_ALL) ||
+				(CLineInput::GetActiveInput() == nullptr && ModPressed && ShiftPressed && Input()->KeyPress(KEY_C)))
+			{
+				m_ColorPipetteActive = !m_ColorPipetteActive;
+			}
+
+			// Palette color pickers
+			for(size_t i = 0; i < NumColorsShown; ++i)
+			{
+				ColorPalette.VSplitLeft(ColorPickerButtonWidth, &Button, &ColorPalette);
+				ColorPalette.VSplitLeft(Spacing, nullptr, &ColorPalette);
+				const auto &&SetColor = [&](ColorRGBA NewColor) {
+					m_aSavedColors[i] = NewColor;
+				};
+				DoColorPickerButton(&m_aSavedColors[i], &Button, m_aSavedColors[i], SetColor);
+			}
+		}
 	}
 
 	// Bottom line buttons
@@ -1399,18 +1431,11 @@ static void Rotate(const CPoint *pCenter, CPoint *pPoint, float Rotation)
 	pPoint->y = (int)(x * std::sin(Rotation) + y * std::cos(Rotation) + pCenter->y);
 }
 
-void CEditor::DoSoundSource(CSoundSource *pSource, int Index)
+void CEditor::DoSoundSource(int LayerIndex, CSoundSource *pSource, int Index)
 {
-	enum
-	{
-		OP_NONE = 0,
-		OP_MOVE,
-		OP_CONTEXT_MENU,
-	};
-
 	void *pID = &pSource->m_Position;
 
-	static int s_Operation = OP_NONE;
+	static ESoundSourceOp s_Operation = ESoundSourceOp::OP_NONE;
 
 	float wx = UI()->MouseWorldX();
 	float wy = UI()->MouseWorldY();
@@ -1424,12 +1449,24 @@ void CEditor::DoSoundSource(CSoundSource *pSource, int Index)
 		UI()->SetHotItem(pID);
 
 	const bool IgnoreGrid = Input()->AltIsPressed();
+	static CSoundSourceOperationTracker s_Tracker(this);
+
+	if(s_Operation == ESoundSourceOp::OP_NONE)
+	{
+		if(!UI()->MouseButton(0))
+			s_Tracker.End();
+	}
 
 	if(UI()->CheckActiveItem(pID))
 	{
+		if(s_Operation != ESoundSourceOp::OP_NONE)
+		{
+			s_Tracker.Begin(pSource, s_Operation, LayerIndex);
+		}
+
 		if(m_MouseDeltaWx * m_MouseDeltaWx + m_MouseDeltaWy * m_MouseDeltaWy > 0.0f)
 		{
-			if(s_Operation == OP_MOVE)
+			if(s_Operation == ESoundSourceOp::OP_MOVE)
 			{
 				float x = wx;
 				float y = wy;
@@ -1440,7 +1477,7 @@ void CEditor::DoSoundSource(CSoundSource *pSource, int Index)
 			}
 		}
 
-		if(s_Operation == OP_CONTEXT_MENU)
+		if(s_Operation == ESoundSourceOp::OP_CONTEXT_MENU)
 		{
 			if(!UI()->MouseButton(1))
 			{
@@ -1450,7 +1487,7 @@ void CEditor::DoSoundSource(CSoundSource *pSource, int Index)
 					UI()->DoPopupMenu(&s_PopupSourceId, UI()->MouseX(), UI()->MouseY(), 120, 200, this, PopupSource);
 					UI()->DisableMouseLock();
 				}
-				s_Operation = OP_NONE;
+				s_Operation = ESoundSourceOp::OP_NONE;
 				UI()->SetActiveItem(nullptr);
 			}
 		}
@@ -1459,7 +1496,7 @@ void CEditor::DoSoundSource(CSoundSource *pSource, int Index)
 			if(!UI()->MouseButton(0))
 			{
 				UI()->DisableMouseLock();
-				s_Operation = OP_NONE;
+				s_Operation = ESoundSourceOp::OP_NONE;
 				UI()->SetActiveItem(nullptr);
 			}
 		}
@@ -1475,7 +1512,7 @@ void CEditor::DoSoundSource(CSoundSource *pSource, int Index)
 
 		if(UI()->MouseButton(0))
 		{
-			s_Operation = OP_MOVE;
+			s_Operation = ESoundSourceOp::OP_MOVE;
 
 			UI()->SetActiveItem(pID);
 			m_SelectedSource = Index;
@@ -1484,7 +1521,7 @@ void CEditor::DoSoundSource(CSoundSource *pSource, int Index)
 		if(UI()->MouseButton(1))
 		{
 			m_SelectedSource = Index;
-			s_Operation = OP_CONTEXT_MENU;
+			s_Operation = ESoundSourceOp::OP_CONTEXT_MENU;
 			UI()->SetActiveItem(pID);
 		}
 	}
@@ -1648,8 +1685,12 @@ void CEditor::ComputePointAlignments(const std::shared_ptr<CLayerQuads> &pLayer,
 			CheckAlignment(pQuadPoint);
 		}
 
-		CPoint Center = (Min + Max) / 2.0f;
-		CheckAlignment(&Center);
+		// Don't check alignment with center of selected quads
+		if(!IsQuadSelected(i))
+		{
+			CPoint Center = (Min + Max) / 2.0f;
+			CheckAlignment(&Center);
+		}
 	}
 
 	// Finally concatenate both alignment vectors into the output
@@ -1952,7 +1993,7 @@ void CEditor::ApplyAxisAlignment(int &OffsetX, int &OffsetY)
 	OffsetY = ((Axis == EAxis::AXIS_NONE || Axis == EAxis::AXIS_Y) ? OffsetY : 0);
 }
 
-void CEditor::DoQuad(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, int Index)
+void CEditor::DoQuad(int LayerIndex, const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, int Index)
 {
 	enum
 	{
@@ -2052,7 +2093,7 @@ void CEditor::DoQuad(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, i
 			// check if we only should move pivot
 			if(s_Operation == OP_MOVE_PIVOT)
 			{
-				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads);
+				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads, -1, LayerIndex);
 
 				s_LastOffset = GetDragOffset(); // Update offset
 				ApplyAxisAlignment(s_LastOffset.x, s_LastOffset.y); // Apply axis alignment to the offset
@@ -2068,7 +2109,7 @@ void CEditor::DoQuad(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, i
 			}
 			else if(s_Operation == OP_MOVE_ALL)
 			{
-				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads);
+				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads, -1, LayerIndex);
 
 				// Compute drag offset
 				s_LastOffset = GetDragOffset();
@@ -2088,7 +2129,7 @@ void CEditor::DoQuad(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, i
 			}
 			else if(s_Operation == OP_ROTATE)
 			{
-				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads);
+				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads, -1, LayerIndex);
 
 				for(size_t i = 0; i < m_vSelectedQuads.size(); ++i)
 				{
@@ -2112,6 +2153,8 @@ void CEditor::DoQuad(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, i
 		{
 			EAxis Axis = GetDragAxis(s_LastOffset.x, s_LastOffset.y);
 			DrawAxis(Axis, s_OriginalPosition, pQuad->m_aPoints[4]);
+
+			str_copy(m_aTooltip, "Hold shift to keep alignment on one axis.");
 		}
 
 		if(s_Operation == OP_MOVE_PIVOT)
@@ -2273,7 +2316,7 @@ void CEditor::DoQuad(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, i
 	Graphics()->QuadsDraw(&QuadItem, 1);
 }
 
-void CEditor::DoQuadPoint(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, int QuadIndex, int V)
+void CEditor::DoQuadPoint(int LayerIndex, const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQuad, int QuadIndex, int V)
 {
 	void *pID = &pQuad->m_aPoints[V];
 
@@ -2345,16 +2388,19 @@ void CEditor::DoQuadPoint(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQu
 						s_Operation = OP_MOVEPOINT;
 						// Save original positions before moving
 						s_OriginalPoint = pQuad->m_aPoints[V];
-						for(int m = 0; m < 4; m++)
-							if(IsQuadPointSelected(QuadIndex, m))
-								PreparePointDrag(pLayer, pQuad, QuadIndex, m);
+						for(int Selected : m_vSelectedQuads)
+						{
+							for(int m = 0; m < 4; m++)
+								if(IsQuadPointSelected(Selected, m))
+									PreparePointDrag(pLayer, &pLayer->m_vQuads[Selected], Selected, m);
+						}
 					}
 				}
 			}
 
 			if(s_Operation == OP_MOVEPOINT)
 			{
-				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads);
+				m_QuadTracker.BeginQuadTrack(pLayer, m_vSelectedQuads, -1, LayerIndex);
 
 				s_LastOffset = GetDragOffset(); // Update offset
 				ApplyAxisAlignment(s_LastOffset.x, s_LastOffset.y); // Apply axis alignment to offset
@@ -2362,11 +2408,14 @@ void CEditor::DoQuadPoint(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQu
 				ComputePointsAlignments(pLayer, false, s_LastOffset.x, s_LastOffset.y, s_Alignments);
 				ApplyAlignments(s_Alignments, s_LastOffset.x, s_LastOffset.y);
 
-				for(int m = 0; m < 4; m++)
+				for(int Selected : m_vSelectedQuads)
 				{
-					if(IsQuadPointSelected(QuadIndex, m))
+					for(int m = 0; m < 4; m++)
 					{
-						DoPointDrag(pLayer, pQuad, QuadIndex, m, s_LastOffset.x, s_LastOffset.y);
+						if(IsQuadPointSelected(Selected, m))
+						{
+							DoPointDrag(pLayer, &pLayer->m_vQuads[Selected], Selected, m, s_LastOffset.x, s_LastOffset.y);
+						}
 					}
 				}
 			}
@@ -2374,22 +2423,26 @@ void CEditor::DoQuadPoint(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQu
 			{
 				int SelectedPoints = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
 
-				m_QuadTracker.BeginQuadPointPropTrack(pLayer, m_vSelectedQuads, SelectedPoints);
+				m_QuadTracker.BeginQuadPointPropTrack(pLayer, m_vSelectedQuads, SelectedPoints, -1, LayerIndex);
 				m_QuadTracker.AddQuadPointPropTrack(EQuadPointProp::PROP_TEX_U);
 				m_QuadTracker.AddQuadPointPropTrack(EQuadPointProp::PROP_TEX_V);
 
-				for(int m = 0; m < 4; m++)
+				for(int Selected : m_vSelectedQuads)
 				{
-					if(IsQuadPointSelected(QuadIndex, m))
+					CQuad *pSelectedQuad = &pLayer->m_vQuads[Selected];
+					for(int m = 0; m < 4; m++)
 					{
-						// 0,2;1,3 - line x
-						// 0,1;2,3 - line y
+						if(IsQuadPointSelected(Selected, m))
+						{
+							// 0,2;1,3 - line x
+							// 0,1;2,3 - line y
 
-						pQuad->m_aTexcoords[m].x += f2fx(m_MouseDeltaWx * 0.001f);
-						pQuad->m_aTexcoords[(m + 2) % 4].x += f2fx(m_MouseDeltaWx * 0.001f);
+							pSelectedQuad->m_aTexcoords[m].x += f2fx(m_MouseDeltaWx * 0.001f);
+							pSelectedQuad->m_aTexcoords[(m + 2) % 4].x += f2fx(m_MouseDeltaWx * 0.001f);
 
-						pQuad->m_aTexcoords[m].y += f2fx(m_MouseDeltaWy * 0.001f);
-						pQuad->m_aTexcoords[m ^ 1].y += f2fx(m_MouseDeltaWy * 0.001f);
+							pSelectedQuad->m_aTexcoords[m].y += f2fx(m_MouseDeltaWy * 0.001f);
+							pSelectedQuad->m_aTexcoords[m ^ 1].y += f2fx(m_MouseDeltaWy * 0.001f);
+						}
 					}
 				}
 			}
@@ -2406,6 +2459,8 @@ void CEditor::DoQuadPoint(const std::shared_ptr<CLayerQuads> &pLayer, CQuad *pQu
 
 			// Alignments
 			DrawPointAlignments(s_Alignments, s_LastOffset.x, s_LastOffset.y);
+
+			str_copy(m_aTooltip, "Hold shift to keep alignment on one axis.");
 		}
 
 		if(s_Operation == OP_CONTEXT_MENU)
@@ -3061,17 +3116,17 @@ void CEditor::DoMapEditor(CUIRect View)
 	static int s_Operation = OP_NONE;
 
 	// draw layer borders
-	std::shared_ptr<CLayer> apEditLayers[128];
+	std::pair<int, std::shared_ptr<CLayer>> apEditLayers[128];
 	size_t NumEditLayers = 0;
 
 	if(m_ShowPicker && GetSelectedLayer(0) && GetSelectedLayer(0)->m_Type == LAYERTYPE_TILES)
 	{
-		apEditLayers[0] = m_pTilesetPicker;
+		apEditLayers[0] = {0, m_pTilesetPicker};
 		NumEditLayers++;
 	}
 	else if(m_ShowPicker)
 	{
-		apEditLayers[0] = m_pQuadsetPicker;
+		apEditLayers[0] = {0, m_pQuadsetPicker};
 		NumEditLayers++;
 	}
 	else
@@ -3090,8 +3145,8 @@ void CEditor::DoMapEditor(CUIRect View)
 		}
 		for(size_t i = 0; i < m_vSelectedLayers.size() && NumEditLayers < 128; i++)
 		{
-			apEditLayers[NumEditLayers] = GetSelectedLayerType(i, EditingType);
-			if(apEditLayers[NumEditLayers])
+			apEditLayers[NumEditLayers] = {m_vSelectedLayers[i], GetSelectedLayerType(i, EditingType)};
+			if(apEditLayers[NumEditLayers].second)
 			{
 				NumEditLayers++;
 			}
@@ -3215,11 +3270,11 @@ void CEditor::DoMapEditor(CUIRect View)
 						for(size_t k = 0; k < NumEditLayers; k++)
 						{
 							size_t BrushIndex = k % m_pBrush->m_vpLayers.size();
-							if(apEditLayers[k]->m_Type == m_pBrush->m_vpLayers[BrushIndex]->m_Type)
+							if(apEditLayers[k].second->m_Type == m_pBrush->m_vpLayers[BrushIndex]->m_Type)
 							{
-								if(apEditLayers[k]->m_Type == LAYERTYPE_TILES)
+								if(apEditLayers[k].second->m_Type == LAYERTYPE_TILES)
 								{
-									std::shared_ptr<CLayerTiles> pLayer = std::static_pointer_cast<CLayerTiles>(apEditLayers[k]);
+									std::shared_ptr<CLayerTiles> pLayer = std::static_pointer_cast<CLayerTiles>(apEditLayers[k].second);
 									std::shared_ptr<CLayerTiles> pBrushLayer = std::static_pointer_cast<CLayerTiles>(m_pBrush->m_vpLayers[BrushIndex]);
 
 									if(pLayer->m_Tele <= pBrushLayer->m_Tele && pLayer->m_Speedup <= pBrushLayer->m_Speedup && pLayer->m_Front <= pBrushLayer->m_Front && pLayer->m_Game <= pBrushLayer->m_Game && pLayer->m_Switch <= pBrushLayer->m_Switch && pLayer->m_Tune <= pBrushLayer->m_Tune)
@@ -3227,7 +3282,7 @@ void CEditor::DoMapEditor(CUIRect View)
 								}
 								else
 								{
-									apEditLayers[k]->BrushDraw(m_pBrush->m_vpLayers[BrushIndex], wx, wy);
+									apEditLayers[k].second->BrushDraw(m_pBrush->m_vpLayers[BrushIndex], wx, wy);
 								}
 							}
 						}
@@ -3261,7 +3316,7 @@ void CEditor::DoMapEditor(CUIRect View)
 							// TODO: do all layers
 							int Grabs = 0;
 							for(size_t k = 0; k < NumEditLayers; k++)
-								Grabs += apEditLayers[k]->BrushGrab(m_pBrush, r);
+								Grabs += apEditLayers[k].second->BrushGrab(m_pBrush, r);
 							if(Grabs == 0)
 								m_pBrush->Clear();
 
@@ -3272,7 +3327,7 @@ void CEditor::DoMapEditor(CUIRect View)
 					else
 					{
 						for(size_t k = 0; k < NumEditLayers; k++)
-							apEditLayers[k]->BrushSelecting(r);
+							apEditLayers[k].second->BrushSelecting(r);
 						UI()->MapScreen();
 					}
 				}
@@ -3286,7 +3341,7 @@ void CEditor::DoMapEditor(CUIRect View)
 							if(m_pBrush->m_vpLayers.size() != NumEditLayers)
 								BrushIndex = 0;
 							std::shared_ptr<CLayer> pBrush = m_pBrush->IsEmpty() ? nullptr : m_pBrush->m_vpLayers[BrushIndex];
-							apEditLayers[k]->FillSelection(m_pBrush->IsEmpty(), pBrush, r);
+							apEditLayers[k].second->FillSelection(m_pBrush->IsEmpty(), pBrush, r);
 						}
 						std::shared_ptr<IEditorAction> Action = std::make_shared<CEditorBrushDrawAction>(this, m_SelectedGroup);
 						m_EditorHistory.RecordAction(Action);
@@ -3294,7 +3349,7 @@ void CEditor::DoMapEditor(CUIRect View)
 					else
 					{
 						for(size_t k = 0; k < NumEditLayers; k++)
-							apEditLayers[k]->BrushSelecting(r);
+							apEditLayers[k].second->BrushSelecting(r);
 						UI()->MapScreen();
 					}
 				}
@@ -3321,8 +3376,8 @@ void CEditor::DoMapEditor(CUIRect View)
 							if(m_pBrush->m_vpLayers.size() != NumEditLayers)
 								BrushIndex = 0;
 
-							if(apEditLayers[k]->m_Type == m_pBrush->m_vpLayers[BrushIndex]->m_Type)
-								apEditLayers[k]->BrushPlace(m_pBrush->m_vpLayers[BrushIndex], wx, wy);
+							if(apEditLayers[k].second->m_Type == m_pBrush->m_vpLayers[BrushIndex]->m_Type)
+								apEditLayers[k].second->BrushPlace(m_pBrush->m_vpLayers[BrushIndex], wx, wy);
 						}
 					}
 
@@ -3381,9 +3436,11 @@ void CEditor::DoMapEditor(CUIRect View)
 
 				for(size_t k = 0; k < NumEditLayers; k++)
 				{
-					if(apEditLayers[k]->m_Type == LAYERTYPE_QUADS)
+					auto &[LayerIndex, pEditLayer] = apEditLayers[k];
+
+					if(pEditLayer->m_Type == LAYERTYPE_QUADS)
 					{
-						std::shared_ptr<CLayerQuads> pLayer = std::static_pointer_cast<CLayerQuads>(apEditLayers[k]);
+						std::shared_ptr<CLayerQuads> pLayer = std::static_pointer_cast<CLayerQuads>(pEditLayer);
 
 						if(m_ShowEnvelopePreview == SHOWENV_NONE)
 							m_ShowEnvelopePreview = SHOWENV_ALL;
@@ -3399,23 +3456,23 @@ void CEditor::DoMapEditor(CUIRect View)
 							for(size_t i = 0; i < pLayer->m_vQuads.size(); i++)
 							{
 								for(int v = 0; v < 4; v++)
-									DoQuadPoint(pLayer, &pLayer->m_vQuads[i], i, v);
+									DoQuadPoint(LayerIndex, pLayer, &pLayer->m_vQuads[i], i, v);
 
-								DoQuad(pLayer, &pLayer->m_vQuads[i], i);
+								DoQuad(LayerIndex, pLayer, &pLayer->m_vQuads[i], i);
 							}
 							Graphics()->QuadsEnd();
 						}
 					}
 
-					if(apEditLayers[k]->m_Type == LAYERTYPE_SOUNDS)
+					if(pEditLayer->m_Type == LAYERTYPE_SOUNDS)
 					{
-						std::shared_ptr<CLayerSounds> pLayer = std::static_pointer_cast<CLayerSounds>(apEditLayers[k]);
+						std::shared_ptr<CLayerSounds> pLayer = std::static_pointer_cast<CLayerSounds>(pEditLayer);
 
 						Graphics()->TextureClear();
 						Graphics()->QuadsBegin();
 						for(size_t i = 0; i < pLayer->m_vSources.size(); i++)
 						{
-							DoSoundSource(&pLayer->m_vSources[i], i);
+							DoSoundSource(LayerIndex, &pLayer->m_vSources[i], i);
 						}
 						Graphics()->QuadsEnd();
 					}
@@ -4293,12 +4350,15 @@ void CEditor::RenderLayers(CUIRect LayersBox)
 			else
 			{
 				std::vector<std::shared_ptr<IEditorAction>> vpActions;
-				for(int k = 0; k < (int)m_vSelectedLayers.size(); k++)
+				std::vector<int> vLayerIndices = m_vSelectedLayers;
+				std::sort(vLayerIndices.begin(), vLayerIndices.end());
+				std::sort(s_vInitialLayerIndices.begin(), s_vInitialLayerIndices.end());
+				for(int k = 0; k < (int)vLayerIndices.size(); k++)
 				{
-					int LayerIndex = m_vSelectedLayers[k];
+					int LayerIndex = vLayerIndices[k];
 					vpActions.push_back(std::make_shared<CEditorActionEditLayerProp>(this, m_SelectedGroup, LayerIndex, ELayerProp::PROP_ORDER, s_vInitialLayerIndices[k], LayerIndex));
 				}
-				m_EditorHistory.RecordAction(std::make_shared<CEditorActionBulk>(CEditorActionBulk(this, vpActions)));
+				m_EditorHistory.RecordAction(std::make_shared<CEditorActionBulk>(this, vpActions, nullptr, true));
 			}
 			s_PreviousOperation = OP_NONE;
 		}
@@ -5824,6 +5884,8 @@ bool CEditor::IsEnvelopeUsed(int EnvelopeIndex) const
 
 void CEditor::RemoveUnusedEnvelopes()
 {
+	m_EnvelopeEditorHistory.BeginBulk();
+	int DeletedCount = 0;
 	for(size_t Envelope = 0; Envelope < m_Map.m_vpEnvelopes.size();)
 	{
 		if(IsEnvelopeUsed(Envelope))
@@ -5832,9 +5894,14 @@ void CEditor::RemoveUnusedEnvelopes()
 		}
 		else
 		{
+			m_EnvelopeEditorHistory.RecordAction(std::make_shared<CEditorActionEveloppeDelete>(this, Envelope));
 			m_Map.DeleteEnvelope(Envelope);
+			DeletedCount++;
 		}
 	}
+	char aDisplay[256];
+	str_format(aDisplay, sizeof(aDisplay), "Tool 'Remove unused envelopes': delete %d envelopes", DeletedCount);
+	m_EnvelopeEditorHistory.EndBulk(aDisplay);
 }
 
 void CEditor::ZoomAdaptOffsetX(float ZoomFactor, const CUIRect &View)
@@ -8183,6 +8250,12 @@ void CEditor::Render()
 		}
 		if(!m_pBrush->IsEmpty())
 		{
+			const bool HasTeleTiles = std::any_of(m_pBrush->m_vpLayers.begin(), m_pBrush->m_vpLayers.end(), [](auto pLayer) {
+				return pLayer->m_Type == LAYERTYPE_TILES && std::static_pointer_cast<CLayerTiles>(pLayer)->m_Tele;
+			});
+			if(HasTeleTiles)
+				str_copy(m_aTooltip, "Use shift+mousewheel up/down to adjust the tele numbers. Use ctrl+f to change all tele numbers to the first unused number.");
+
 			if(Input()->ShiftIsPressed())
 			{
 				if(Input()->KeyPress(KEY_MOUSE_WHEEL_DOWN))
@@ -8202,8 +8275,16 @@ void CEditor::Render()
 
 	MapView()->UpdateZoom();
 
+	// Cancel color pipette with escape before closing popup menus with escape
+	if(m_ColorPipetteActive && UI()->ConsumeHotkey(CUI::HOTKEY_ESCAPE))
+	{
+		m_ColorPipetteActive = false;
+	}
+
 	UI()->RenderPopupMenus();
 	FreeDynamicPopupMenus();
+
+	UpdateColorPipette();
 
 	if(m_Dialog == DIALOG_NONE && !m_PopupEventActivated && UI()->ConsumeHotkey(CUI::HOTKEY_ESCAPE))
 	{
@@ -8274,22 +8355,106 @@ void CEditor::FreeDynamicPopupMenus()
 	}
 }
 
+void CEditor::UpdateColorPipette()
+{
+	if(!m_ColorPipetteActive)
+		return;
+
+	static char s_PipetteScreenButton;
+	if(UI()->HotItem() == &s_PipetteScreenButton)
+	{
+		// Read color one pixel to the top and left as we would otherwise not read the correct
+		// color due to the cursor sprite being rendered over the current mouse position.
+		const int PixelX = clamp<int>(round_to_int((UI()->MouseX() - 1.0f) / UI()->Screen()->w * Graphics()->ScreenWidth()), 0, Graphics()->ScreenWidth() - 1);
+		const int PixelY = clamp<int>(round_to_int((UI()->MouseY() - 1.0f) / UI()->Screen()->h * Graphics()->ScreenHeight()), 0, Graphics()->ScreenHeight() - 1);
+		Graphics()->ReadPixel(ivec2(PixelX, PixelY), &m_PipetteColor);
+	}
+
+	// Simulate button overlaying the entire screen to intercept all clicks for color pipette.
+	const int ButtonResult = DoButton_Editor_Common(&s_PipetteScreenButton, "", 0, UI()->Screen(), 0, "Left click to pick a color from the screen. Right click to cancel pipette mode.");
+	// Don't handle clicks if we are panning, so the pipette stays active while panning.
+	// Checking m_pContainerPanned alone is not enough, as this variable is reset when
+	// panning ends before this function is called.
+	if(m_pContainerPanned == nullptr && m_pContainerPannedLast == nullptr)
+	{
+		if(ButtonResult == 1)
+		{
+			char aClipboard[9];
+			str_format(aClipboard, sizeof(aClipboard), "%08X", m_PipetteColor.PackAlphaLast());
+			Input()->SetClipboardText(aClipboard);
+
+			// Check if any of the saved colors is equal to the picked color and
+			// bring it to the front of the list instead of adding a duplicate.
+			int ShiftEnd = (int)std::size(m_aSavedColors) - 1;
+			for(int i = 0; i < (int)std::size(m_aSavedColors); ++i)
+			{
+				if(m_aSavedColors[i].Pack() == m_PipetteColor.Pack())
+				{
+					ShiftEnd = i;
+					break;
+				}
+			}
+			for(int i = ShiftEnd; i > 0; --i)
+			{
+				m_aSavedColors[i] = m_aSavedColors[i - 1];
+			}
+			m_aSavedColors[0] = m_PipetteColor;
+		}
+		if(ButtonResult > 0)
+		{
+			m_ColorPipetteActive = false;
+		}
+	}
+}
+
 void CEditor::RenderMousePointer()
 {
 	if(!m_ShowMousePointer)
 		return;
 
+	constexpr float CursorSize = 16.0f;
+
+	// Cursor
 	Graphics()->WrapClamp();
 	Graphics()->TextureSet(m_aCursorTextures[m_CursorType]);
 	Graphics()->QuadsBegin();
 	if(m_CursorType == CURSOR_RESIZE_V)
-		Graphics()->QuadsSetRotation(pi / 2);
+	{
+		Graphics()->QuadsSetRotation(pi / 2.0f);
+	}
 	if(ms_pUiGotContext == UI()->HotItem())
-		Graphics()->SetColor(1, 0, 0, 1);
-	IGraphics::CQuadItem QuadItem(UI()->MouseX(), UI()->MouseY(), 16.0f, 16.0f);
+	{
+		Graphics()->SetColor(1.0f, 0.0f, 0.0f, 1.0f);
+	}
+	const float CursorOffset = m_CursorType == CURSOR_RESIZE_V || m_CursorType == CURSOR_RESIZE_H ? -CursorSize / 2.0f : 0.0f;
+	IGraphics::CQuadItem QuadItem(UI()->MouseX() + CursorOffset, UI()->MouseY() + CursorOffset, CursorSize, CursorSize);
 	Graphics()->QuadsDrawTL(&QuadItem, 1);
 	Graphics()->QuadsEnd();
 	Graphics()->WrapNormal();
+
+	// Pipette color
+	if(m_ColorPipetteActive)
+	{
+		CUIRect PipetteRect = {UI()->MouseX() + CursorSize, UI()->MouseY() + CursorSize, 80.0f, 20.0f};
+		if(PipetteRect.x + PipetteRect.w + 2.0f > UI()->Screen()->w)
+		{
+			PipetteRect.x = UI()->MouseX() - PipetteRect.w - CursorSize / 2.0f;
+		}
+		if(PipetteRect.y + PipetteRect.h + 2.0f > UI()->Screen()->h)
+		{
+			PipetteRect.y = UI()->MouseY() - PipetteRect.h - CursorSize / 2.0f;
+		}
+		PipetteRect.Draw(ColorRGBA(0.2f, 0.2f, 0.2f, 0.7f), IGraphics::CORNER_ALL, 3.0f);
+
+		CUIRect Pipette, Label;
+		PipetteRect.VSplitLeft(PipetteRect.h, &Pipette, &Label);
+		Pipette.Margin(2.0f, &Pipette);
+		Pipette.Draw(m_PipetteColor, IGraphics::CORNER_ALL, 3.0f);
+
+		char aLabel[8];
+		str_format(aLabel, sizeof(aLabel), "#%06X", m_PipetteColor.PackAlphaLast(false));
+		UI()->DoLabel(&Label, aLabel, 10.0f, TEXTALIGN_MC);
+	}
 }
 
 void CEditor::Reset(bool CreateDefault)
@@ -8320,6 +8485,7 @@ void CEditor::Reset(bool CreateDefault)
 	m_MouseDeltaWx = 0;
 	m_MouseDeltaWy = 0;
 	m_pContainerPanned = nullptr;
+	m_pContainerPannedLast = nullptr;
 
 	m_Map.m_Modified = false;
 	m_Map.m_ModifiedAuto = false;
@@ -8658,6 +8824,8 @@ void CEditor::OnUpdate()
 		Reset();
 	}
 
+	m_pContainerPannedLast = m_pContainerPanned;
+
 	// handle key presses
 	for(size_t i = 0; i < Input()->NumEvents(); i++)
 	{
@@ -8735,6 +8903,8 @@ void CEditor::OnWindowResize()
 
 void CEditor::OnClose()
 {
+	m_ColorPipetteActive = false;
+
 	if(m_ToolbarPreviewSound >= 0 && Sound()->IsPlaying(m_ToolbarPreviewSound))
 		Sound()->Pause(m_ToolbarPreviewSound);
 	if(m_FilePreviewSound >= 0 && Sound()->IsPlaying(m_FilePreviewSound))
