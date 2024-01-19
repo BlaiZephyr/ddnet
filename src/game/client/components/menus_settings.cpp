@@ -2521,11 +2521,10 @@ void CMenus::RenderSettingsAppearance(CUIRect MainView)
 		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowhud, Localize("Show ingame HUD"), &g_Config.m_ClShowhud, &Section, LineSize);
 
 		// Switches of the various normal HUD elements
-		LeftView.HSplitTop(SectionTotalMargin + 5 * LineSize, &Section, &LeftView);
+		LeftView.HSplitTop(SectionTotalMargin + 4 * LineSize, &Section, &LeftView);
 		Section.Margin(SectionMargin, &Section);
 
 		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowhudHealthAmmo, Localize("Show health, shields and ammo"), &g_Config.m_ClShowhudHealthAmmo, &Section, LineSize);
-		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowChat, Localize("Show chat"), &g_Config.m_ClShowChat, &Section, LineSize);
 		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowKillMessages, Localize("Show kill messages"), &g_Config.m_ClShowKillMessages, &Section, LineSize);
 		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowhudScore, Localize("Show score"), &g_Config.m_ClShowhudScore, &Section, LineSize);
 		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowLocalTimeAlways, Localize("Show local time always"), &g_Config.m_ClShowLocalTimeAlways, &Section, LineSize);
@@ -2596,9 +2595,9 @@ void CMenus::RenderSettingsAppearance(CUIRect MainView)
 		UI()->DoLabel(&Label, Localize("Chat"), HeadlineFontSize, TEXTALIGN_ML);
 
 		// General chat settings
-		LeftView.HSplitTop(SectionTotalMargin + 7 * LineSize, &Section, &LeftView);
+		LeftView.HSplitTop(SectionTotalMargin + 8 * LineSize, &Section, &LeftView);
 		Section.Margin(SectionMargin, &Section);
-
+		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowChat, Localize("Show chat"), &g_Config.m_ClShowChat, &Section, LineSize);
 		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClChatTeamColors, Localize("Show names in chat in team colors"), &g_Config.m_ClChatTeamColors, &Section, LineSize);
 		DoButton_CheckBoxAutoVMarginAndSet(&g_Config.m_ClShowChatFriends, Localize("Show only chat messages from friends"), &g_Config.m_ClShowChatFriends, &Section, LineSize);
 
@@ -3058,14 +3057,9 @@ void CMenus::RenderSettingsAppearance(CUIRect MainView)
 		UI()->DoLabel(&Label, Localize("Info Messages"), HeadlineFontSize, TEXTALIGN_ML);
 
 		// General info messages settings
-		LeftView.HSplitTop(SectionTotalMargin + 2 * LineSize + 2 * ColorPickerLineSize, &Section, &LeftView);
+		LeftView.HSplitTop(SectionTotalMargin + 1 * LineSize + 2 * ColorPickerLineSize, &Section, &LeftView);
 		Section.Margin(SectionMargin, &Section);
 
-		Section.HSplitTop(LineSize, &Button, &Section);
-		if(DoButton_CheckBox(&g_Config.m_ClShowKillMessages, Localize("Show kill messages"), g_Config.m_ClShowKillMessages, &Button))
-		{
-			g_Config.m_ClShowKillMessages ^= 1;
-		}
 
 		Section.HSplitTop(LineSize, &Button, &Section);
 		if(DoButton_CheckBox(&g_Config.m_ClShowFinishMessages, Localize("Show finish messages"), g_Config.m_ClShowFinishMessages, &Button))
