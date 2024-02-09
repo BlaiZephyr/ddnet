@@ -717,14 +717,12 @@ void CMenus::RenderServerbrowserFilters(CUIRect View)
 	}
 
 	// map finish filters
-	if(m_CommunityCache.m_AnyRanksAvailable)
-	{
 		View.HSplitTop(RowHeight, &Button, &View);
 		if(DoButton_CheckBox(&g_Config.m_BrIndicateFinished, Localize("Indicate map finish"), g_Config.m_BrIndicateFinished, &Button))
 		{
 			g_Config.m_BrIndicateFinished ^= 1;
 			if(g_Config.m_BrIndicateFinished)
-				ServerBrowser()->Refresh(ServerBrowser()->GetCurrentType());
+				RefreshBrowserTab(g_Config.m_UiPage);
 		}
 
 		if(g_Config.m_BrIndicateFinished)
@@ -737,7 +735,6 @@ void CMenus::RenderServerbrowserFilters(CUIRect View)
 		{
 			g_Config.m_BrFilterUnfinishedMap = 0;
 		}
-	}
 
 	if(!m_CommunityCache.m_vpSelectableCountries.empty() || !m_CommunityCache.m_vpSelectableTypes.empty())
 	{
